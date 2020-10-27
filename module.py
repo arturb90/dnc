@@ -70,12 +70,31 @@ class Memory(Model):
         components = self.__split_if(interface)
 
         # Dynamic memory allocation.
+        memory_retention = self.__memory_retention(
+            components['free_gate'],
+            memory_state['read_weights']
+        )
+
+        memory_usage = self.__memory_usage(
+            memory_state['usage_vec'],
+            memory_state['write_weights'],
+            memory_retention
+        )
+
+        alloc_w = self.__alloc_weighting(memory_usage)
 
         # Content write weighting.
         write_addressing = self.__content_addressing(
             memory_state['memory'],
             components['write_key'],
             components['write_strength']
+        )
+
+        write_w = self.__write_interpolation(
+            {'write': components['write_gate'],
+             'alloc': components['alloc_gate']},
+            write_addressing,
+            alloc_w
         )
 
         memory_output = self.out_layer(interface)
@@ -114,9 +133,50 @@ class Memory(Model):
 
         return memory_state
 
-    def __memory_retention(self, free_gates, read_weights):
+    def __memory_retention(self, free_gates, prev_read_w):
 
-        pass
+        free_gates = tf.expand_dims(free_gates, axis=1)
+        temp = tf.multiply(free_gates, prev_read_w)
+        temp = tf.ones(prev_read_w.shape) - temp
+        memory_retention = tf.reduce_prod(temp, axis=2)
+        return memory_retention
+
+    def __memory_usage(self, prev_usage, prev_write_w, retention):
+
+        u_add = tf.add(prev_usage, prev_write_w)
+        u_muliply = tf.multiply(prev_usage, prev_write_w)
+        usage = tf.multiply(tf.subtract(u_add, u_muliply), retention)
+        return usage
+
+    def __alloc_weighting(self, usage):
+
+        indices = tf.argsort(usage)
+        usage_sorted = tf.gather(usage, indices, axis=1, batch_dims=1)
+        temp = tf.subtract(tf.ones(usage.shape), usage_sorted)
+        cumprod = tf.math.cumprod(usage_sorted, axis=1)
+        alloc_w = tf.multiply(temp, cumprod)
+
+        # The allocation weights are sorted in
+        # ascending order, sorting has to be reverted.
+        fn = (lambda t: tf.math.invert_permutation(t))
+        indices_inv = tf.map_fn(fn=fn, elems=indices)
+        alloc_w = tf.gather(alloc_w, indices_inv, axis=1, batch_dims=1)
+
+        return alloc_w
+
+    def __write_interpolation(self, gate, write_addr, alloc_w):
+
+        write_gate = tf.expand_dims(gate['write'], axis=-1)
+        alloc_gate = tf.expand_dims(gate['alloc'], axis=-1)
+
+        ones = tf.ones(alloc_gate.shape)
+        inv_alloc_gate = tf.subtract(ones, alloc_gate)
+        gated_write_addr = tf.multiply(inv_alloc_gate, write_addr)
+        gated_alloc_w = tf.multiply(alloc_gate, alloc_w)
+        gated_add = tf.add(gated_write_addr, gated_alloc_w)
+        write_w = tf.multiply(write_gate, gated_add)
+
+        return write_w
 
     def __content_addressing(self, memory, key, strength):
 
@@ -167,6 +227,13 @@ class Memory(Model):
             'read_keys': [if_split[i] for i in range(rk_start, rk_end)],
             'read_mode': [if_split[i] for i in range(rm_start, rm_end)]
         }
+
+
+class TemporalLink(Model):
+
+    def __init__(self):
+
+        super(TemporalLink, self).__init__()
 
 
 class FFN(Model):
