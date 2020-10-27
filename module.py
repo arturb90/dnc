@@ -97,6 +97,11 @@ class Memory(Model):
             alloc_w
         )
 
+        memory_state['temporal_link'].update(
+            memory_state['precedence_weight'],
+            write_w
+        )
+
         memory_output = self.out_layer(interface)
         return (memory_output, memory_state)
 
@@ -130,6 +135,16 @@ class Memory(Model):
             batch_size,
             self.memory_size
         ))
+
+        memory_state['precedence_weight'] = tf.zeros((
+            batch_size,
+            self.memory_size
+        ))
+
+        memory_state['temporal_link'] = TemporalLink(
+            batch_size,
+            self.memory_size
+        )
 
         return memory_state
 
@@ -183,6 +198,7 @@ class Memory(Model):
         similarity = self.__cosine_similarity(memory, key)
         strength = tf.reshape(strength, shape=(key.shape[0], 1, 1))
         similarity = tf.multiply(similarity, strength)
+        similarity = tf.squeeze(similarity, axis=2)
         return tf.math.softmax(similarity, axis=1)
 
     def __cosine_similarity(self, memory, key):
@@ -231,9 +247,43 @@ class Memory(Model):
 
 class TemporalLink(Model):
 
-    def __init__(self):
+    def __init__(self, batch_size, memory_size):
 
         super(TemporalLink, self).__init__()
+        self.matrix = tf.zeros((
+            batch_size,
+            memory_size,
+            memory_size
+        ))
+
+    def update(self, precedence, write_w):
+
+        shape = (*write_w.shape, write_w.shape[1])
+        write_w = tf.expand_dims(write_w, axis=-1)
+        precedence = tf.expand_dims(precedence, axis=1)
+
+        bc_write_w = tf.broadcast_to(write_w, shape)
+        bc_write_w_t = tf.transpose(bc_write_w, perm=[0, 2, 1])
+        temp1 = tf.subtract(bc_write_w, bc_write_w_t)
+        temp1 = tf.subtract(tf.ones(shape), temp1)
+        temp1 = tf.multiply(temp1, self.matrix)
+
+        bc_precedence = tf.broadcast_to(precedence, shape)
+        temp2 = tf.multiply(bc_write_w, bc_precedence)
+        updated = tf.add(temp1, temp2)
+
+        # Ensure self-links are excluded.
+        updated = tf.linalg.set_diag(updated)
+        self.matrix = updated
+
+    def __precedence_weight(self, prev_precedence, write_w):
+
+        ones = tf.ones((write_w.shape[0], 1))
+        sum_write_w = tf.reduce_sum(write_w, axis=1, keep_dims=True)
+        temp = tf.subtract(ones, sum_write_w)
+        temp = tf.multiply(temp, prev_precedence)
+        precedence = tf.add(temp, write_w)
+        return precedence
 
 
 class FFN(Model):
