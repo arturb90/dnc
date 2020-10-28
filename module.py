@@ -102,6 +102,28 @@ class Memory(Model):
             write_w
         )
 
+        # Compute forward and backward weights
+        # for each read head.
+        forward_w = memory_state['temporal_link'].forward(
+            memory_state['read_weights']
+        )
+
+        backward_w = memory_state['temporal_link'].backward(
+            memory_state['read_weights']
+        )
+
+        read_addressing = self.__content_addressing(
+            memory_state['memory'],
+            components['read_keys'],
+            components['read_strength']
+        )
+
+        read_w = self.__read_interpolation(
+            read_addressing,
+            forward_w, backward_w,
+            components['read_mode']
+        )
+
         memory_output = self.out_layer(interface)
         return (memory_output, memory_state)
 
@@ -176,13 +198,15 @@ class Memory(Model):
         fn = (lambda t: tf.math.invert_permutation(t))
         indices_inv = tf.map_fn(fn=fn, elems=indices)
         alloc_w = tf.gather(alloc_w, indices_inv, axis=1, batch_dims=1)
+        alloc_w = tf.expand_dims(alloc_w, axis=-1)
 
         return alloc_w
 
     def __write_interpolation(self, gate, write_addr, alloc_w):
 
-        write_gate = tf.expand_dims(gate['write'], axis=-1)
-        alloc_gate = tf.expand_dims(gate['alloc'], axis=-1)
+        shape = (write_addr.shape[0], 1, 1)
+        write_gate = tf.reshape(gate['write'], shape=shape)
+        alloc_gate = tf.reshape(gate['alloc'], shape=shape)
 
         ones = tf.ones(alloc_gate.shape)
         inv_alloc_gate = tf.subtract(ones, alloc_gate)
@@ -193,25 +217,29 @@ class Memory(Model):
 
         return write_w
 
+    def __read_interpolation(self, read_addr, fwd_w, bwd_w, read_modes):
+
+        backward_mode = tf.multiply(bwd_w, read_modes[:, 0:1, :])
+        content_mode = tf.multiply(read_addr, read_modes[:, 1:2, :])
+        forward_mode = tf.multiply(fwd_w, read_modes[:, 2:3, :])
+        read_w = backward_mode + content_mode + forward_mode
+        return read_w
+
     def __content_addressing(self, memory, key, strength):
 
         similarity = self.__cosine_similarity(memory, key)
-        strength = tf.reshape(strength, shape=(key.shape[0], 1, 1))
+        strength = tf.expand_dims(strength, axis=1)
         similarity = tf.multiply(similarity, strength)
-        similarity = tf.squeeze(similarity, axis=2)
         return tf.math.softmax(similarity, axis=1)
 
     def __cosine_similarity(self, memory, key):
 
         # Calculate denominator
-        key = tf.expand_dims(key, axis=1)
-        key_norm = self.__l2_norm(key, axis=2)
+        key_norm = self.__l2_norm(key, axis=1)
         memory_norms = self.__l2_norm(memory, axis=2)
         norm = tf.multiply(memory_norms, key_norm)
 
-        # Calculate numerator.
-        dot = tf.reduce_sum(memory * key, axis=2, keepdims=True)
-
+        dot = tf.einsum('bij, bjk -> bik', memory, key)
         return dot / (norm + _EPSILON)
 
     def __l2_norm(self, t, axis=0):
@@ -232,16 +260,22 @@ class Memory(Model):
         rm_start, rm_end = rk_end, rk_end + self.read_heads
 
         return {
-            'write_key': if_split[0],
+            'write_key': tf.expand_dims(if_split[0], axis=2),
             'write_vec': if_split[1],
             'erase_vec': tf.math.sigmoid(if_split[2]),
             'free_gate': tf.math.sigmoid(if_split[3]),
             'read_strength': self.__oneplus(if_split[4]),
-            'write_strength': self.__oneplus(if_split[5][:, 0]),
+            'write_strength': self.__oneplus(if_split[5][:, 0:1]),
             'write_gate': tf.math.sigmoid(if_split[5][:, 1]),
             'alloc_gate': tf.math.sigmoid(if_split[5][:, 2]),
-            'read_keys': [if_split[i] for i in range(rk_start, rk_end)],
-            'read_mode': [if_split[i] for i in range(rm_start, rm_end)]
+            'read_keys': tf.stack(
+                [if_split[i] for i in range(rk_start, rk_end)],
+                axis=2
+            ),
+            'read_mode': tf.stack(
+                [if_split[i] for i in range(rm_start, rm_end)],
+                axis=2
+            )
         }
 
 
@@ -250,6 +284,7 @@ class TemporalLink(Model):
     def __init__(self, batch_size, memory_size):
 
         super(TemporalLink, self).__init__()
+        self.memory_size = memory_size
         self.matrix = tf.zeros((
             batch_size,
             memory_size,
@@ -258,10 +293,13 @@ class TemporalLink(Model):
 
     def update(self, precedence, write_w):
 
-        shape = (*write_w.shape, write_w.shape[1])
-        write_w = tf.expand_dims(write_w, axis=-1)
-        precedence = tf.expand_dims(precedence, axis=1)
+        shape = (
+            write_w.shape[0],
+            self.memory_size,
+            self.memory_size
+        )
 
+        precedence = tf.expand_dims(precedence, axis=1)
         bc_write_w = tf.broadcast_to(write_w, shape)
         bc_write_w_t = tf.transpose(bc_write_w, perm=[0, 2, 1])
         temp1 = tf.subtract(bc_write_w, bc_write_w_t)
@@ -273,8 +311,20 @@ class TemporalLink(Model):
         updated = tf.add(temp1, temp2)
 
         # Ensure self-links are excluded.
-        updated = tf.linalg.set_diag(updated)
+        diagonal = tf.zeros((updated.shape[0], self.memory_size))
+        updated = tf.linalg.set_diag(updated, diagonal)
         self.matrix = updated
+
+    def forward(self, read_w):
+
+        forward_w = tf.matmul(self.matrix, read_w)
+        return forward_w
+
+    def backward(self, read_w):
+
+        transpose = tf.transpose(self.matrix, perm=[0, 2, 1])
+        backward_w = tf.matmul(transpose, read_w)
+        return backward_w
 
     def __precedence_weight(self, prev_precedence, write_w):
 
