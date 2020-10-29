@@ -97,6 +97,13 @@ class Memory(Model):
             alloc_w
         )
 
+        memory_updated = self.__write_memory(
+            memory_state['memory'],
+            components['write_vec'],
+            components['erase_vec'],
+            write_w
+        )
+
         memory_state['temporal_link'].update(
             memory_state['precedence_weight'],
             write_w
@@ -122,6 +129,11 @@ class Memory(Model):
             read_addressing,
             forward_w, backward_w,
             components['read_mode']
+        )
+
+        read_vectors = self.__read_memory(
+            memory_updated,
+            read_w
         )
 
         memory_output = self.out_layer(interface)
@@ -224,6 +236,20 @@ class Memory(Model):
         forward_mode = tf.multiply(fwd_w, read_modes[:, 2:3, :])
         read_w = backward_mode + content_mode + forward_mode
         return read_w
+
+    def __write_memory(self, memory, write_vec, erase_vec, write_w):
+
+        ones = tf.ones(memory.shape)
+        temp1 = tf.einsum('bij, bk -> bik', write_w, erase_vec)
+        temp2 = tf.einsum('bij, bk -> bik', write_w, write_vec)
+        temp1 = tf.subtract(ones, temp1)
+        temp1 = tf.multiply(memory, temp1)
+        memory_updated = tf.multiply(temp1, temp2)
+        return memory_updated
+
+    def __read_memory(self, memory, read_w):
+
+        return tf.einsum('bij, bik -> bjk', memory, read_w)
 
     def __content_addressing(self, memory, key, strength):
 
