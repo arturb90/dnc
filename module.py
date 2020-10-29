@@ -61,7 +61,8 @@ class Memory(Model):
 
         self.out_layer = Dense(
             opts.output_size,
-            activation=None
+            activation=None,
+            use_bias=False
         )
 
     def __call__(self, interface, memory_state):
@@ -109,6 +110,11 @@ class Memory(Model):
             write_w
         )
 
+        precedence_w = self.__precedence_weight(
+            memory_state['precedence_weight'],
+            write_w
+        )
+
         # Compute forward and backward weights
         # for each read head.
         forward_w = memory_state['temporal_link'].forward(
@@ -131,13 +137,25 @@ class Memory(Model):
             components['read_mode']
         )
 
-        read_vectors = self.__read_memory(
+        read_vec = self.__read_memory(
             memory_updated,
             read_w
         )
 
-        memory_output = self.out_layer(interface)
-        return (memory_output, memory_state)
+        new_memory_state = {
+            'memory': memory_updated,
+            'read_weights': read_w,
+            'write_weights': write_w,
+            'read_vec': read_vec,
+            'usage_vec': memory_usage,
+            'precedence_weight': precedence_w,
+            'temporal_link': memory_state['temporal_link']
+        }
+
+        shape = (read_vec.shape[0], -1)
+        flat_read_vec = tf.reshape(read_vec, shape=shape)
+        memory_output = self.out_layer(flat_read_vec)
+        return (memory_output, new_memory_state)
 
     def initialize(self, batch_size):
 
@@ -156,7 +174,7 @@ class Memory(Model):
 
         memory_state['write_weights'] = tf.zeros((
             batch_size,
-            self.memory_size
+            self.memory_size, 1
         ))
 
         memory_state['read_vec'] = tf.zeros((
@@ -187,15 +205,16 @@ class Memory(Model):
         free_gates = tf.expand_dims(free_gates, axis=1)
         temp = tf.multiply(free_gates, prev_read_w)
         temp = tf.ones(prev_read_w.shape) - temp
-        memory_retention = tf.reduce_prod(temp, axis=2)
+        memory_retention = tf.reduce_prod(temp, axis=2, keepdims=True)
         return memory_retention
 
     def __memory_usage(self, prev_usage, prev_write_w, retention):
 
+        prev_usage = tf.expand_dims(prev_usage, axis=-1)
         u_add = tf.add(prev_usage, prev_write_w)
         u_muliply = tf.multiply(prev_usage, prev_write_w)
         usage = tf.multiply(tf.subtract(u_add, u_muliply), retention)
-        return usage
+        return tf.squeeze(usage)
 
     def __alloc_weighting(self, usage):
 
@@ -268,6 +287,15 @@ class Memory(Model):
         dot = tf.einsum('bij, bjk -> bik', memory, key)
         return dot / (norm + _EPSILON)
 
+    def __precedence_weight(self, prev_precedence, write_w):
+
+        ones = tf.ones((write_w.shape[0], 1))
+        sum_write_w = tf.reduce_sum(write_w, axis=1)
+        temp = tf.subtract(ones, sum_write_w)
+        temp = tf.multiply(temp, prev_precedence)
+        precedence = tf.add(temp, tf.squeeze(write_w, axis=2))
+        return precedence
+
     def __l2_norm(self, t, axis=0):
 
         squared = tf.reduce_sum(t * t, axis=axis, keepdims=True)
@@ -298,10 +326,10 @@ class Memory(Model):
                 [if_split[i] for i in range(rk_start, rk_end)],
                 axis=2
             ),
-            'read_mode': tf.stack(
+            'read_mode': tf.math.softmax(tf.stack(
                 [if_split[i] for i in range(rm_start, rm_end)],
                 axis=2
-            )
+            ), axis=1)
         }
 
 
@@ -351,15 +379,6 @@ class TemporalLink(Model):
         transpose = tf.transpose(self.matrix, perm=[0, 2, 1])
         backward_w = tf.matmul(transpose, read_w)
         return backward_w
-
-    def __precedence_weight(self, prev_precedence, write_w):
-
-        ones = tf.ones((write_w.shape[0], 1))
-        sum_write_w = tf.reduce_sum(write_w, axis=1, keep_dims=True)
-        temp = tf.subtract(ones, sum_write_w)
-        temp = tf.multiply(temp, prev_precedence)
-        precedence = tf.add(temp, write_w)
-        return precedence
 
 
 class FFN(Model):

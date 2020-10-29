@@ -40,7 +40,7 @@ def train(opts, model):
         p, loss = train_step(model, src, tgt, crit, opt)
         train_acc(tgt, p)
 
-        if epoch % 20 == 0:
+        if epoch % 2 == 0:
             fig, ax = plt.subplots(2, 1)
             ax[0].imshow(src[0].T)
             ax[1].imshow(p.numpy()[0].T)
@@ -94,8 +94,8 @@ if __name__ == '__main__':
 
     # Task options
     parser.add_argument('--task', type=str, default='copyrepeat')
-    parser.add_argument('--seq_len', type=int, default=1)
-    parser.add_argument('--vec_len', type=int, default=2)
+    parser.add_argument('--seq_len', type=int, default=5)
+    parser.add_argument('--vec_len', type=int, default=5)
     parser.add_argument('--n_pairs', type=int, default=1)
 
     opts = get_opts(parser.parse_args())
