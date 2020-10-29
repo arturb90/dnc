@@ -62,7 +62,7 @@ class Memory(Model):
         self.out_layer = Dense(
             opts.output_size,
             activation=None,
-            use_bias=False
+            use_bias=True
         )
 
     def __call__(self, interface, memory_state):
@@ -126,7 +126,7 @@ class Memory(Model):
         )
 
         read_addressing = self.__content_addressing(
-            memory_state['memory'],
+            memory_updated,
             components['read_keys'],
             components['read_strength']
         )
@@ -160,11 +160,11 @@ class Memory(Model):
     def initialize(self, batch_size):
 
         memory_state = {}
-        memory_state['memory'] = tf.zeros((
+        memory_state['memory'] = tf.fill((
             batch_size,
             self.memory_size,
             self.address_size
-        ))
+        ), _EPSILON)
 
         memory_state['read_weights'] = tf.fill((
             batch_size,
@@ -218,10 +218,12 @@ class Memory(Model):
 
     def __alloc_weighting(self, usage):
 
+        usage = _EPSILON + (1 - _EPSILON) * usage
+
         indices = tf.argsort(usage)
         usage_sorted = tf.gather(usage, indices, axis=1, batch_dims=1)
         temp = tf.subtract(tf.ones(usage.shape), usage_sorted)
-        cumprod = tf.math.cumprod(usage_sorted, axis=1)
+        cumprod = tf.math.cumprod(usage_sorted, axis=1, exclusive=True)
         alloc_w = tf.multiply(temp, cumprod)
 
         # The allocation weights are sorted in
@@ -263,7 +265,7 @@ class Memory(Model):
         temp2 = tf.einsum('bij, bk -> bik', write_w, write_vec)
         temp1 = tf.subtract(ones, temp1)
         temp1 = tf.multiply(memory, temp1)
-        memory_updated = tf.multiply(temp1, temp2)
+        memory_updated = tf.add(temp1, temp2)
         return memory_updated
 
     def __read_memory(self, memory, read_w):
@@ -397,14 +399,14 @@ class FFN(Model):
         self.__out_layer = Dense(
             opts.output_size,
             activation=None,
-            use_bias=False
+            use_bias=True
         )
 
         # Interface layer.
         self.__interface = Dense(
             opts.interface_size,
             activation=None,
-            use_bias=False
+            use_bias=True
         )
 
     def __call__(self, inputs, state):
@@ -437,14 +439,14 @@ class LSTM(Model):
         self.__out_layer = Dense(
             opts.output_size,
             activation=None,
-            use_bias=False
+            use_bias=True
         )
 
         # Interface layer.
         self.__interface = Dense(
             opts.interface_size,
             activation=None,
-            use_bias=False
+            use_bias=True
         )
 
     def __call__(self, inputs, state):

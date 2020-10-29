@@ -23,9 +23,7 @@ def train(opts, model):
 
     # Optimizer and criterion.
     opt = optimizers.SGD(learning_rate=0.1)
-    crit = losses.BinaryCrossentropy(
-        reduction=losses.Reduction.NONE
-    )
+    crit = losses.BinaryCrossentropy()
 
     # Accuracy metric.
     train_acc = metrics.CategoricalAccuracy(name='train_acc')
@@ -42,7 +40,7 @@ def train(opts, model):
         p, loss = train_step(model, src, tgt, crit, opt)
         train_acc(tgt, p)
 
-        if epoch % 50 == 0:
+        if epoch % 500 == 0:
             fig, ax = plt.subplots(2, 1)
             ax[0].imshow(src[0].T)
             ax[1].imshow(p.numpy()[0].T)
@@ -84,11 +82,11 @@ if __name__ == '__main__':
 
     # Session options.
     parser.add_argument('--epochs', type=int, default=1000)
-    parser.add_argument('--batch_size', type=int, default=1)
+    parser.add_argument('--batch_size', type=int, default=3)
 
     # Model options.
-    parser.add_argument('--controller', type=str, default='lstm')
-    parser.add_argument('--memory_size', type=int, default=32)
+    parser.add_argument('--controller', type=str, default='ffn')
+    parser.add_argument('--memory_size', type=int, default=16)
     parser.add_argument('--address_size', type=int, default=8)
     parser.add_argument('--read_heads', type=int, default=2)
     parser.add_argument('--lstm_units', type=int, default=64)
@@ -96,8 +94,8 @@ if __name__ == '__main__':
 
     # Task options
     parser.add_argument('--task', type=str, default='copyrepeat')
-    parser.add_argument('--seq_len', type=int, default=5)
-    parser.add_argument('--vec_len', type=int, default=5)
+    parser.add_argument('--seq_len', type=int, default=2)
+    parser.add_argument('--vec_len', type=int, default=3)
     parser.add_argument('--n_pairs', type=int, default=3)
 
     opts = get_opts(parser.parse_args())
