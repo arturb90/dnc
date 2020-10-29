@@ -42,6 +42,7 @@ class DNC(Model):
         )
 
         output = ctrl_output['output'] + memory_output
+        output = tf.math.sigmoid(output)
 
         state = {
             'ctrl': ctrl_state,

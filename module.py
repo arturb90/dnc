@@ -166,22 +166,22 @@ class Memory(Model):
             self.address_size
         ))
 
-        memory_state['read_weights'] = tf.zeros((
+        memory_state['read_weights'] = tf.fill((
             batch_size,
             self.memory_size,
             self.read_heads
-        ))
+        ), _EPSILON)
 
-        memory_state['write_weights'] = tf.zeros((
+        memory_state['write_weights'] = tf.fill((
             batch_size,
             self.memory_size, 1
-        ))
+        ), _EPSILON)
 
-        memory_state['read_vec'] = tf.zeros((
+        memory_state['read_vec'] = tf.fill((
             batch_size,
             self.read_heads,
             self.address_size
-        ))
+        ), _EPSILON)
 
         memory_state['usage_vec'] = tf.zeros((
             batch_size,
@@ -214,7 +214,7 @@ class Memory(Model):
         u_add = tf.add(prev_usage, prev_write_w)
         u_muliply = tf.multiply(prev_usage, prev_write_w)
         usage = tf.multiply(tf.subtract(u_add, u_muliply), retention)
-        return tf.squeeze(usage)
+        return tf.reshape(usage, shape=(usage.shape[0], -1))
 
     def __alloc_weighting(self, usage):
 
